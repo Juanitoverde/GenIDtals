@@ -4,7 +4,7 @@ Alternative Biometric Security Fingerprinting and Identity Verification
 # GenIDtals™
 
 <p align="center">
-  <img src="logo.png" alt="GenIDtals Logo" width="300"/>
+  <img src="file_00000000679061fbb749c09f0327456a.png" alt="GenIDtals Logo" width="300"/>
 </p>
 
 ## Advanced Anatomical Biometric Authentication System
