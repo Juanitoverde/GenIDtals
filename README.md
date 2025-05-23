@@ -1,6 +1,8 @@
 # GenIDtals
 Alternative Biometric Security Fingerprinting and Identity Verification 
 
+"Breaches are spreading faster than viruses in the ’60s—and for once, we might have the cure. Enter GenIDtals: the snug, biometric firewall cradled neatly in the palm of your hand. Not just protection—prevention. This is the foreskin of the future—non-circumventable, and definitely not something you let anyone snip. It’s the digital prophylactic we didn’t know we needed, turning hard problems into flaccid threats. Unsolicited malware? Trojans? Blocked. This isn’t security—it’s sackurity. The only cockblock I’ll proudly endorse." 
+
 # GenIDtals™
 
 <p align="center">
