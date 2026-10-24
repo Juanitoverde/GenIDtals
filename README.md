@@ -37,8 +37,8 @@ GenIDtals implements multi-factor biometric pattern analysis to create a uniquel
 
 ### Security Framework
 
-- **Zero-Knowledge Proof Architecture**: Authentication without exposing or storing raw biometric data
-- **AES-256 Encrypted Template Storage**: All biometric templates secured with military-grade encryption
+- **No Raw Image Retention**: Only derived feature templates are stored; raw images never touch disk
+- **Encrypted Template Storage**: Templates are encrypted with Fernet (AES-128-CBC + HMAC-SHA256), bound to their user ID with a separate HMAC, and stored under keyed-hash filenames
 - **Local Processing**: Complete authentication pipeline runs locally without network dependencies
 - **GDPR & CCPA Compliant Design**: Meets or exceeds all relevant privacy regulations
 
@@ -69,10 +69,55 @@ GenIDtals implements multi-factor biometric pattern analysis to create a uniquel
 ## Technical Stack
 
 - **Core Language**: Python 3.9+
-- **Computer Vision**: OpenCV, NumPy, SciPy, scikit-learn
-- **Cryptography**: AES-256 (Fernet), HMAC validation
+- **Computer Vision**: OpenCV, NumPy, SciPy
+- **Cryptography**: Fernet (AES-128-CBC + HMAC-SHA256), PBKDF2-SHA256 key derivation, HMAC record binding
 - **Liveness Detection**: Optical flow (Farneback) + Laplacian variance
 - **Testing Framework**: PyTest with synthetic data generation
+
+## Getting Started
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+
+# Generate synthetic specimen images to try the pipeline end to end
+genidtals synth --identity 1 --count 4 --out samples
+genidtals enroll --user alice --images samples/specimen1_1.png samples/specimen1_2.png samples/specimen1_3.png
+genidtals authenticate --user alice --image samples/specimen1_4.png
+
+# Run the test suite
+pytest
+```
+
+Templates are stored in `~/.genidtals` by default (`--store` to change it). The store key is generated on first use and kept in the store directory with `0600` permissions; set `GENIDTALS_PASSPHRASE` to derive it from a passphrase instead.
+
+### Security Levels
+
+| Level      | Match threshold | Min. reference images | Liveness enforced |
+|------------|-----------------|-----------------------|-------------------|
+| `low`      | 58%             | 1                     | no                |
+| `standard` | 62%             | 2                     | yes               |
+| `high`     | 68%             | 3                     | yes               |
+| `maximum`  | 74%             | 3                     | yes               |
+
+Thresholds are calibrated on the synthetic specimen generator; recalibrate them on real captures before relying on them.
+
+### Project Layout
+
+```
+genidtals/
+  preprocessing.py     input processing, ROI segmentation, multi-angle normalization
+  features/vascular.py multi-scale Hessian vesselness mapping
+  features/texture.py  Haar wavelet band energies + rotation-invariant LBP
+  features/follicular.py follicle blob detection and spatial distribution metrics
+  matching.py          per-modality similarity and weighted score fusion
+  liveness.py          sharpness, moire and optical-flow presentation-attack checks
+  storage.py           encrypted template store
+  engine.py            BiometricEngine enrollment/authentication API
+  synthetic.py         deterministic synthetic specimens for tests and demos
+  cli.py               command-line interface
+tests/                 pytest suite
+```
 
 ## Usage
 
@@ -84,6 +129,9 @@ $ python genidtals.py enroll --user alice --images reference1.jpg reference2.jpg
 
 # Authentication with test image
 $ python genidtals.py authenticate --user alice --image test.jpg
+
+# Authentication with a burst of frames for motion-based liveness
+$ python genidtals.py authenticate --user alice --image f1.jpg --frames f2.jpg f3.jpg
 
 # System status and diagnostics
 $ python genidtals.py diagnostics
@@ -119,7 +167,7 @@ if result.authenticated:
 ## Ethics & Privacy
  
 - All biometric data remains under user control
-- Zero-knowledge architecture prevents unauthorized access to sensitive data
+- Raw images are never stored; templates are encrypted at rest and can be deleted at any time (`genidtals delete`)
 - Transparent processing documentation
 
 ## License

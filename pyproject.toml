@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "genidtals"
+version = "0.1.0"
+description = "Alternative biometric security fingerprinting and identity verification"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "opencv-python-headless>=4.8",
+    "cryptography>=41",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+genidtals = "genidtals.cli:main"
+
+[tool.setuptools]
+packages = ["genidtals", "genidtals.features"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
