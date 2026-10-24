@@ -93,23 +93,66 @@ def make_specimen(seed: int) -> Specimen:
     return Specimen(seed, img, mask)
 
 
+def _elastic(img: np.ndarray, mask: np.ndarray, rng: np.random.Generator, amplitude: float):
+    """Smooth random displacement field, modelling soft-tissue deformation."""
+    h, w = img.shape
+    fields = []
+    for _ in range(2):
+        f = cv2.GaussianBlur(rng.standard_normal((h, w)).astype(np.float32), (0, 0), 40)
+        fields.append(f * amplitude / (np.abs(f).max() + 1e-6))
+    gx, gy = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
+    map_x, map_y = gx + fields[0], gy + fields[1]
+    return (cv2.remap(img, map_x, map_y, cv2.INTER_LINEAR, borderValue=0),
+            cv2.remap(mask, map_x, map_y, cv2.INTER_NEAREST, borderValue=0))
+
+
 def capture(specimen: Specimen, rng: np.random.Generator | None = None,
             max_rotation: float = 20.0, max_shift: float = 20.0,
-            noise_sigma: float = 3.0, blur_sigma: float = 0.0) -> np.ndarray:
-    """Simulate acquiring one image of a specimen; returns uint8 grayscale."""
+            noise_sigma: float = 3.0, blur_sigma: float = 0.0,
+            hard: bool = False) -> np.ndarray:
+    """Simulate acquiring one image of a specimen; returns uint8 grayscale.
+
+    ``hard=True`` adds the conditions a real sensor sees: arbitrary
+    rotation, larger scale change, elastic tissue deformation, uneven
+    illumination, partial occlusion and variable focus/noise.
+    """
     rng = rng or np.random.default_rng()
     c = SPECIMEN_SIZE / 2
+    if hard:
+        max_rotation, max_shift = 180.0, 30.0
     angle = rng.uniform(-max_rotation, max_rotation)
-    scale = rng.uniform(0.92, 1.08)
+    scale = rng.uniform(0.85, 1.15) if hard else rng.uniform(0.92, 1.08)
     mat = cv2.getRotationMatrix2D((c, c), angle, scale)
     mat[0, 2] += CAPTURE_SIZE / 2 - c + rng.uniform(-max_shift, max_shift)
     mat[1, 2] += CAPTURE_SIZE / 2 - c + rng.uniform(-max_shift, max_shift)
     out = cv2.warpAffine(specimen.image, mat, (CAPTURE_SIZE, CAPTURE_SIZE),
                          flags=cv2.INTER_LINEAR, borderValue=0)
     fg = cv2.warpAffine(specimen.mask, mat, (CAPTURE_SIZE, CAPTURE_SIZE),
-                        flags=cv2.INTER_NEAREST) > 0
+                        flags=cv2.INTER_NEAREST)
+    if hard:
+        out, fg = _elastic(out, fg, rng, amplitude=rng.uniform(2.0, 5.0))
+    fg = fg > 0
+
     gain, offset = rng.uniform(0.9, 1.1), rng.uniform(-12, 12)
+    if hard:
+        # Low-frequency illumination field, up to +/-20% across the ROI.
+        light = cv2.GaussianBlur(rng.standard_normal(out.shape).astype(np.float32), (0, 0), 80)
+        light = 1.0 + 0.2 * light / (np.abs(light).max() + 1e-6)
+        out = out * light
+        gain, offset = rng.uniform(0.8, 1.2), rng.uniform(-20, 20)
     out[fg] = out[fg] * gain + offset
+
+    if hard and rng.random() < 0.5:
+        # Partial occlusion (e.g. a finger or clothing edge) over a small area.
+        ys, xs = np.nonzero(fg)
+        i = rng.integers(len(xs))
+        radius = int(rng.uniform(12, 24))
+        cv2.circle(out, (int(xs[i]), int(ys[i])), radius, float(rng.uniform(90, 200)), -1)
+        out[~fg] = 0
+
+    if hard:
+        blur_sigma = max(blur_sigma, rng.uniform(0.0, 1.0))
+        noise_sigma = rng.uniform(2.0, 5.0)
     if blur_sigma > 0:
         out = cv2.GaussianBlur(out, (0, 0), blur_sigma)
     out += rng.normal(0, noise_sigma, out.shape).astype(np.float32)
@@ -122,7 +165,7 @@ def capture_sequence(specimen: Specimen, frames: int = 3,
     rng = rng or np.random.default_rng()
     base = rng.integers(0, 2 ** 31)
     seq = []
-    for k in range(frames):
+    for _ in range(frames):
         frame_rng = np.random.default_rng(base)
         # Same pose each frame, then a small independent jitter on top.
         img = capture(specimen, frame_rng)

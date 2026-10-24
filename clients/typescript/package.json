@@ -1,0 +1,17 @@
+{
+  "name": "@genidtals/client",
+  "version": "0.2.0",
+  "description": "Zero-dependency client for the GenIDtals biometric REST API",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist", "src"],
+  "scripts": {
+    "build": "tsc",
+    "test": "node --experimental-strip-types test/e2e.test.ts"
+  },
+  "engines": { "node": ">=18" },
+  "devDependencies": {
+    "typescript": "^5.8.0"
+  }
+}

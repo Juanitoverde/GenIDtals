@@ -61,7 +61,7 @@ def moire_prominence(gray: np.ndarray) -> float:
 
 def mean_flow(frames: list[np.ndarray], mask: np.ndarray | None = None) -> float:
     mags = []
-    for prev, nxt in zip(frames, frames[1:]):
+    for prev, nxt in zip(frames, frames[1:], strict=False):
         flow = cv2.calcOpticalFlowFarneback(prev, nxt, None, 0.5, 3, 15, 3, 5, 1.2, 0)
         mag = np.linalg.norm(flow, axis=2)
         mags.append(float(mag[mask > 0].mean() if mask is not None else mag.mean()))

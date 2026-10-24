@@ -2,10 +2,13 @@
 
 import numpy as np
 
-from . import follicular, texture, vascular
+from . import follicular, keypoints, texture, vascular
+
+MODALITIES = ("keypoints", "vascular", "texture", "follicular")
 
 
-def extract_all(canon: np.ndarray, mask: np.ndarray) -> dict:
+def extract_grid_features(canon: np.ndarray, mask: np.ndarray) -> dict:
+    """Position-dependent features, recomputed after registration at match time."""
     return {
         "vascular": vascular.extract(canon, mask),
         "texture": texture.extract(canon, mask),
@@ -13,4 +16,9 @@ def extract_all(canon: np.ndarray, mask: np.ndarray) -> dict:
     }
 
 
-__all__ = ["extract_all", "follicular", "texture", "vascular"]
+def extract_all(canon: np.ndarray, mask: np.ndarray) -> dict:
+    return {"keypoints": keypoints.extract(canon, mask), **extract_grid_features(canon, mask)}
+
+
+__all__ = ["MODALITIES", "extract_all", "extract_grid_features",
+           "follicular", "keypoints", "texture", "vascular"]

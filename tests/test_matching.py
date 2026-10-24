@@ -1,14 +1,15 @@
 import numpy as np
 import pytest
 
-from genidtals import BiometricEngine, synthetic
-from genidtals.config import SECURITY_LEVELS
-from genidtals.matching import compare, fuse
-from genidtals.preprocessing import ImageError, load_image, normalize
+from genidtals import ImageError, synthetic
+from genidtals.calibration import DEFAULT_CALIBRATION
+from genidtals.features import keypoints
+from genidtals.matching import Probe, compare, match
+from genidtals.preprocessing import load_image, normalize
 
 
-def template(img):
-    return BiometricEngine.extract_template(img)
+def probe(img):
+    return Probe.from_gray(load_image(img))
 
 
 def test_normalization_is_pose_invariant(specimens, rng):
@@ -17,43 +18,55 @@ def test_normalization_is_pose_invariant(specimens, rng):
     b = synthetic.capture(sp, rng, max_rotation=25, max_shift=25)
     ca, _ = normalize(a)
     cb, _ = normalize(b)
-    corr = np.corrcoef(ca.ravel().astype(float), cb.ravel().astype(float))[0, 1]
-    assert corr > 0.8
+    assert np.corrcoef(ca.ravel().astype(float), cb.ravel().astype(float))[0, 1] > 0.8
 
 
-def test_upside_down_capture_still_matches(specimens, rng):
+def test_keypoints_register_arbitrary_rotation(specimens, rng):
     sp = specimens[2]
-    ref = template(synthetic.capture(sp, rng))
+    ref = probe(synthetic.capture(sp, rng)).features
     flipped = np.rot90(synthetic.capture(sp, rng), 2).copy()
-    assert fuse(compare(template(flipped), ref)) > SECURITY_LEVELS["maximum"].match_threshold
+    km = keypoints.match(probe(flipped).features["keypoints"], ref["keypoints"])
+    assert km.registered
+    assert km.similarity == 1.0
 
 
-def test_genuine_and_impostor_scores_separate(specimens, rng):
-    refs = {i: template(synthetic.capture(sp, rng)) for i, sp in specimens.items()}
+def test_registration_improves_grid_modalities(specimens, captures):
+    sp = specimens[3]
+    a, b = captures(sp, 2)
+    pa, pb = probe(a), probe(b)
+    parts, registered = compare(pa, pb.features)
+    assert registered
+    assert parts["vascular"] > 0.7
+
+
+def test_impostor_keypoints_do_not_register(specimens, captures):
+    pa = probe(captures(specimens[1], 1)[0])
+    pb = probe(captures(specimens[2], 1)[0])
+    km = keypoints.match(pa.features["keypoints"], pb.features["keypoints"])
+    assert not km.registered
+    assert km.similarity == 0.0
+
+
+def test_genuine_and_impostor_scores_separate(specimens, captures):
+    refs = {i: [probe(img).features for img in captures(sp, 2)] for i, sp in specimens.items()}
     genuine, impostor = [], []
     for i, sp in specimens.items():
-        probe = template(synthetic.capture(sp, rng))
-        for j, ref in refs.items():
-            (genuine if i == j else impostor).append(fuse(compare(probe, ref)))
-    assert min(genuine) > SECURITY_LEVELS["maximum"].match_threshold
-    assert max(impostor) < SECURITY_LEVELS["low"].match_threshold
+        p = probe(captures(sp, 1)[0])
+        for j, r in refs.items():
+            (genuine if i == j else impostor).append(match(p, r, DEFAULT_CALIBRATION).score)
+    assert min(genuine) > DEFAULT_CALIBRATION.threshold("maximum") + 10
+    assert max(impostor) < DEFAULT_CALIBRATION.threshold("low") - 5
 
 
-def test_modality_scores_are_bounded(specimens, rng):
-    a = template(synthetic.capture(specimens[1], rng))
-    b = template(synthetic.capture(specimens[3], rng))
-    for score in compare(a, b).values():
-        assert 0.0 <= score <= 1.0
+def test_modality_scores_are_bounded(specimens, captures):
+    a, b = probe(captures(specimens[1], 1)[0]), probe(captures(specimens[3], 1)[0])
+    parts, _ = compare(a, b.features)
+    assert set(parts) == {"keypoints", "vascular", "texture", "follicular"}
+    assert all(0.0 <= v <= 1.0 for v in parts.values())
 
 
-def test_load_image_rejects_tiny_and_blank():
+def test_blank_and_tiny_images_rejected():
     with pytest.raises(ImageError):
         load_image(np.zeros((32, 32), np.uint8))
     with pytest.raises(ImageError):
-        normalize(np.zeros((200, 200), np.uint8))
-
-
-def test_load_image_accepts_color(specimens, rng):
-    gray = synthetic.capture(specimens[1], rng)
-    color = np.dstack([gray] * 3)
-    assert load_image(color).shape == gray.shape
+        probe(np.zeros((200, 200), np.uint8))

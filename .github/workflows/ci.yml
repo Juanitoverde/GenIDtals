@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install -e ".[dev]"
+      - run: ruff check genidtals genidtals.py examples tests
+      - run: pytest -q
+      - name: Accuracy benchmark (hard synthetic set)
+        run: genidtals --json benchmark --subjects 20 --images 6 --seed 101
+
+  typescript-client:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: pip install -e ".[server]"
+      - name: Type-check
+        working-directory: clients/typescript
+        run: npm install --no-audit --no-fund && npx tsc --noEmit
+      - name: End-to-end against a live server
+        run: |
+          python - <<'PY'
+          import numpy as np, cv2
+          from genidtals import synthetic as syn
+          rng = np.random.default_rng(4)
+          a, b = syn.make_specimen(77), syn.make_specimen(78)
+          for i in range(1, 4):
+              cv2.imwrite(f"/tmp/a_{i}.png", syn.capture(a, rng, hard=True))
+          cv2.imwrite("/tmp/b_1.png", syn.capture(b, rng, hard=True))
+          PY
+          export GENIDTALS_API_KEY="$(genidtals keygen --api-key)"
+          GENIDTALS_API_KEYS="$GENIDTALS_API_KEY" genidtals --home /tmp/gh serve --port 8080 &
+          for i in $(seq 1 50); do curl -sf localhost:8080/v1/health && break; sleep 0.2; done
+          cd clients/typescript
+          GENIDTALS_URL=http://127.0.0.1:8080 GENIDTALS_SAMPLES=/tmp npm test
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t genidtals:ci .
+      - name: Smoke test
+        run: |
+          docker run -d --name g -p 8080:8080 \
+            -e GENIDTALS_API_KEYS="ci-key-0123456789abcdefghijkl" \
+            -e GENIDTALS_KEYS="$(python3 -c 'import os,base64;print(base64.urlsafe_b64encode(os.urandom(32)).decode())')" \
+            genidtals:ci
+          for i in $(seq 1 50); do curl -sf localhost:8080/v1/health && break; sleep 0.5; done
+          curl -sf -H "Authorization: Bearer ci-key-0123456789abcdefghijkl" localhost:8080/v1/info
+          docker run --rm --entrypoint genidtals genidtals:ci diagnostics

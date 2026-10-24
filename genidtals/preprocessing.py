@@ -7,36 +7,78 @@ the result is cropped and resized to ``CANONICAL_SIZE``.
 """
 
 from pathlib import Path
-from typing import Union
+from typing import BinaryIO, Union
 
 import cv2
 import numpy as np
 
 from .config import CANONICAL_SIZE
+from .errors import ImageError
 
-ImageInput = Union[str, Path, np.ndarray]
+ImageInput = Union[str, Path, bytes, bytearray, memoryview, BinaryIO, np.ndarray]
+
+MAX_INPUT_BYTES = 25 * 1024 * 1024
+MAX_INPUT_PIXELS = 40_000_000
+MIN_SIDE = 64
+# Larger inputs are downscaled before processing; detail beyond this is
+# discarded by normalization anyway.
+WORKING_SIDE = 1024
 
 
-class ImageError(ValueError):
-    pass
+def _decode(data: bytes) -> np.ndarray:
+    if len(data) > MAX_INPUT_BYTES:
+        raise ImageError(f"Image is {len(data)} bytes; the limit is {MAX_INPUT_BYTES}")
+    if not data:
+        raise ImageError("Image data is empty")
+    img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_UNCHANGED)
+    if img is None:
+        raise ImageError("Could not decode image (unsupported format or corrupt data)")
+    return img
 
 
 def load_image(source: ImageInput) -> np.ndarray:
-    """Return a single-channel uint8 image from a path or array."""
+    """Return a single-channel uint8 image.
+
+    Accepts a file path, encoded image bytes (PNG, JPEG, TIFF, BMP, WebP...),
+    a binary file object, or a NumPy array (grayscale, BGR or BGRA).
+    """
     if isinstance(source, np.ndarray):
         img = source
+    elif isinstance(source, (bytes, bytearray, memoryview)):
+        img = _decode(bytes(source))
+    elif isinstance(source, (str, Path)):
+        path = Path(source)
+        try:
+            if path.stat().st_size > MAX_INPUT_BYTES:
+                raise ImageError(f"Image file exceeds {MAX_INPUT_BYTES} bytes: {path}")
+            data = path.read_bytes()
+        except OSError as e:
+            raise ImageError(f"Could not read image: {path} ({e.strerror})") from e
+        img = _decode(data)
+    elif hasattr(source, "read"):
+        img = _decode(source.read(MAX_INPUT_BYTES + 1))
     else:
-        img = cv2.imread(str(source), cv2.IMREAD_UNCHANGED)
-        if img is None:
-            raise ImageError(f"Could not read image: {source}")
+        raise ImageError(f"Unsupported image input type: {type(source).__name__}")
+
     if img.ndim == 3:
-        code = cv2.COLOR_BGRA2GRAY if img.shape[2] == 4 else cv2.COLOR_BGR2GRAY
-        img = cv2.cvtColor(img, code)
+        if img.shape[2] == 1:
+            img = img[:, :, 0]
+        else:
+            code = cv2.COLOR_BGRA2GRAY if img.shape[2] == 4 else cv2.COLOR_BGR2GRAY
+            img = cv2.cvtColor(img, code)
+    elif img.ndim != 2:
+        raise ImageError(f"Unsupported image shape {img.shape}")
     if img.dtype != np.uint8:
-        img = cv2.normalize(img, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-    if min(img.shape) < 64:
-        raise ImageError(f"Image too small ({img.shape[1]}x{img.shape[0]}); need at least 64x64")
-    return img
+        img = cv2.normalize(img.astype(np.float32), None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    h, w = img.shape
+    if min(h, w) < MIN_SIDE:
+        raise ImageError(f"Image too small ({w}x{h}); need at least {MIN_SIDE}x{MIN_SIDE}")
+    if h * w > MAX_INPUT_PIXELS:
+        raise ImageError(f"Image too large ({w}x{h}); the limit is {MAX_INPUT_PIXELS} pixels")
+    if max(h, w) > WORKING_SIDE:
+        f = WORKING_SIDE / max(h, w)
+        img = cv2.resize(img, (round(w * f), round(h * f)), interpolation=cv2.INTER_AREA)
+    return np.ascontiguousarray(img)
 
 
 def segment_roi(gray: np.ndarray) -> np.ndarray:
@@ -72,9 +114,10 @@ def _rotate(img: np.ndarray, center, angle: float, interp=cv2.INTER_LINEAR) -> n
     return cv2.warpAffine(img, mat, (diag, diag), flags=interp, borderValue=0)
 
 
-def normalize(gray: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def normalize(gray: np.ndarray, mask: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
     """Return (canonical image, canonical mask), both CANONICAL_SIZE square."""
-    mask = segment_roi(gray)
+    if mask is None:
+        mask = segment_roi(gray)
     cx, cy, theta = _orientation(mask, gray)
     # Rotate so the principal axis is vertical.
     angle = theta - 90.0
